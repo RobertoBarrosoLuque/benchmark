@@ -9,9 +9,9 @@ def extract_concurrency(dirname):
     return int(match.group(1)) if match else 0
 
 
-def process_stats(base_dir, output_size):
+def process_stats(base_dir, output_size, model_name: str):
     results = []
-    pattern = f'r1-output-{output_size}-'
+    pattern = f'{model_name}-{output_size}-'
 
     # Find all relevant directories
     for dirname in os.listdir(base_dir):
@@ -65,13 +65,15 @@ def main():
     parser = argparse.ArgumentParser(description='Extract latency statistics from benchmark results')
     parser.add_argument('--output-length', type=int, required=True,
                         help='Output token length used in the benchmarks')
+    parser.add_argument('--model-name', type=str, required=True,
+                        help='Name of the model used in the benchmarks')
 
     args = parser.parse_args()
 
     base_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'results')
 
     # Process with the specified output size
-    process_stats(base_dir, args.output_length)
+    process_stats(base_dir, args.output_length, args.model_name)
 
 
 if __name__ == "__main__":

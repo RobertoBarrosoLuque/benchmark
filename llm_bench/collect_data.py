@@ -56,7 +56,7 @@ def main():
     # Rest of the function remains the same as original code
     for u in us:
         # Create results directory name
-        results_dir = f"results/r1-output-{output_length}-{u}u-{t.replace('min', '')}"
+        results_dir = f"results/{args.model}{output_length}-{u}u-{t.replace('min', '')}"
         os.makedirs(results_dir, exist_ok=True)
 
         # Construct the command
