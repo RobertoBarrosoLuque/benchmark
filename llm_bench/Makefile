@@ -9,7 +9,7 @@ setup:
 
 install:
 	@echo "Installing dependencies..."
-	uv pip install -e .
+	uv pip install -r requirements.txt
 
 clean:
 	@echo "Cleaning up..."

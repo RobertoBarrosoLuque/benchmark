@@ -1,6 +1,7 @@
 import os
 import pandas as pd
 import re
+import argparse
 
 
 def extract_concurrency(dirname):
@@ -14,7 +15,7 @@ def process_stats(base_dir, output_size):
 
     # Find all relevant directories
     for dirname in os.listdir(base_dir):
-        if pattern in dirname and dirname.endswith('5min'):
+        if pattern in dirname and ('min' in dirname or '5' in dirname):  # Allow different duration formats
             stats_file = os.path.join(base_dir, dirname, 'stats_stats.csv')
             if os.path.exists(stats_file):
                 # Read the stats file
@@ -49,19 +50,28 @@ def process_stats(base_dir, output_size):
 
     # Convert to DataFrame and sort by concurrency
     results_df = pd.DataFrame(results)
-    results_df = results_df.sort_values('Concurrency')
+    if not results_df.empty:
+        results_df = results_df.sort_values('Concurrency')
 
-    # Save to CSV
-    output_file = f'latency_stats_output_{output_size}.csv'
-    results_df.to_csv(output_file, index=False)
-    print(f"Created {output_file}")
+        # Save to CSV
+        output_file = f'latency_stats_output_{output_size}.csv'
+        results_df.to_csv(output_file, index=False)
+        print(f"Created {output_file}")
+    else:
+        print(f"No results found for output size {output_size}")
 
 
 def main():
+    parser = argparse.ArgumentParser(description='Extract latency statistics from benchmark results')
+    parser.add_argument('--output-length', type=int, required=True,
+                        help='Output token length used in the benchmarks')
+
+    args = parser.parse_args()
+
     base_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'results')
 
-    # Process output size of 480
-    process_stats(base_dir, 480)
+    # Process with the specified output size
+    process_stats(base_dir, args.output_length)
 
 
 if __name__ == "__main__":

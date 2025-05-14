@@ -1,24 +1,98 @@
 from dotenv import load_dotenv
+
 load_dotenv()
 import os
 import datetime
 import subprocess
 import time
+import argparse
 
-"""
-Change constants here
-"""
-api_key = os.getenv('FIREWORKS_API_KEY')
-deployment_id = "33aa85b1"
-# us = [1,2,3,4,5,6,7,8,9,10]
-us = [1,2,3,4,5,6,7,8,9,10,20,30,40,50,60,70,80,90,100]     # Number of concurrent workers
-r = 100      # Rate of spawning new workers (workers/second). Look through README.md for more details on spawn rate
-prompt_length = 63360
-prompt_cache_max_len = 0
-output_length = 640
-t = "5min" #test duration, set to 1 minute for now
 
-#Function to utilize subprocess to run the locust script
+def main():
+    # Parse command line arguments
+    parser = argparse.ArgumentParser(description='Run LLM benchmarking with configurable parameters')
+    parser.add_argument('--deployment-id', required=True, help='Deployment ID for the model')
+    parser.add_argument('--concurrency', nargs='+', type=int,
+                        default=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
+                        help='List of concurrent workers (e.g., 1 10 20 30)')
+    parser.add_argument('--spawn-rate', type=int, default=100,
+                        help='Rate of spawning new workers (workers/second)')
+    parser.add_argument('--prompt-length', type=int, required=True,
+                        help='Input prompt length in tokens')
+    parser.add_argument('--prompt-cache-max-len', type=int, default=0,
+                        help='Token count for caching (0 disables caching)')
+    parser.add_argument('--output-length', type=int, required=True,
+                        help='Expected output token length')
+    parser.add_argument('--duration', default="5min",
+                        help='Duration for each test (e.g., 5min, 10min)')
+    parser.add_argument('--model', default="accounts/fireworks/models/deepseek-v3-0324",
+                        help='Base model name (deployment ID will be appended)')
+    parser.add_argument('--api-key', help='Fireworks API key (overrides .env file)')
+    parser.add_argument('--host', default="https://api.fireworks.ai/inference",
+                        help='Host URL for the API')
+
+    args = parser.parse_args()
+
+    # Get API key from args or environment
+    api_key = args.api_key or os.getenv('FIREWORKS_API_KEY')
+    if not api_key:
+        raise ValueError("No API key provided. Set FIREWORKS_API_KEY in .env file or use --api-key")
+
+    deployment_id = args.deployment_id
+    us = args.concurrency
+    r = args.spawn_rate
+    prompt_length = args.prompt_length
+    prompt_cache_max_len = args.prompt_cache_max_len
+    output_length = args.output_length
+    t = args.duration
+
+    provider_name = "fireworks"
+    model_name = f"{args.model}#accounts/pyroworks/deployments/{deployment_id}"
+    h = args.host
+
+    # Create base results directory
+    os.makedirs("results", exist_ok=True)
+
+    # Rest of the function remains the same as original code
+    for u in us:
+        # Create results directory name
+        results_dir = f"results/r1-output-{output_length}-{u}u-{t.replace('min', '')}"
+        os.makedirs(results_dir, exist_ok=True)
+
+        # Construct the command
+        cmd = [
+            "locust",
+            "--headless",  # Run without web UI
+            "--only-summary",  # Only show summary stats
+            "-H", h,  # Host URL
+            "--provider", provider_name,
+            "--model", model_name,
+            "--api-key", api_key,
+            "-t", t,  # Test duration
+            "--html", f"{results_dir}/report.html",  # Generate HTML report
+            "--csv", f"{results_dir}/stats",  # Generate CSV stats
+            "-u", str(u),  # Number of users
+            "-r", str(r),  # Spawn rate
+            "-p", str(prompt_length),
+            "--prompt-cache-max-len", str(prompt_cache_max_len),
+            "-o", str(output_length),
+            "--stream"
+        ]
+
+        # Add load_test.py as the locust file
+        locust_file = os.path.join(os.path.dirname(__file__), "load_test.py")
+        cmd.extend(["-f", locust_file])
+
+        # Execute the command
+        success = execute_subprocess(cmd)
+
+        if success:
+            time.sleep(1)
+
+        time.sleep(25)
+
+
+# Function to utilize subprocess to run the locust script
 def execute_subprocess(cmd):
     print(f"\nExecuting benchmark: {' '.join(str(arg) for arg in cmd)}\n")
     process = subprocess.Popen(
@@ -44,70 +118,5 @@ def execute_subprocess(cmd):
     return True
 
 
-'''
-Make sure to create a .env file in the root directory and add your API keys.
-For this example, we will use the Fireworks API key.
-
-Add the following to your .env file:
-
-FIREWORKS_API_KEY=<your_fireworks_api_key>.
-
-Alternatively you can edit the following script flags for custom configurations.
-'''
-
-
-provider_name = "fireworks"
-model_name = "accounts/fireworks/models/deepseek-v3-0324" + f"#accounts/pyroworks/deployments/{deployment_id}"
-h = "https://api.fireworks.ai/inference" #host url
-
-# Create base results directory
-os.makedirs("results", exist_ok=True)
-
-for u in us:
-    # Create results directory of name single_model_provider_analysis_{TIMESTAMP}
-    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M")
-
-    edited_model_name = model_name.replace("/", "_") if provider_name != "fireworks" else model_name.replace("accounts/fireworks/models/", "").replace("/", "_")
-
-    results_dir = f"results/r1-output-{output_length}-{u}u-5min"
-    os.makedirs(results_dir, exist_ok=True)
-
-    # Construct the command
-    cmd = [
-        "locust",
-        "--headless",       # Run without web UI
-        "--only-summary",   # Only show summary stats
-        "-H", h,           # Host URL
-        "--provider", provider_name,
-        "--model", model_name,
-        "--api-key", api_key,
-        "-t", t,           # Test duration
-        "--html", f"{results_dir}/report.html",  # Generate HTML report
-        "--csv", f"{results_dir}/stats",        # Generate CSV stats
-    ]
-
-    # Add Mode 1 (Fixed QPS) parameters if uncommented, remember to remove --qps below if using fixed concurrency mode
-    cmd.extend([
-    # "--qps", str(qps),  # Target QPS
-        "-u", str(u),      # Number of users
-        "-r", str(r),      # Spawn rate
-        "-p", str(prompt_length),
-        "--prompt-cache-max-len", str(prompt_cache_max_len),
-        "-o", str(output_length),
-        "--stream"
-    ])
-
-    # Add load_test.py as the locust file
-    locust_file = os.path.join(os.path.dirname(__file__), "load_test.py")
-    cmd.extend(["-f", locust_file])
-
-    #call our helper function to execute the command
-    success = execute_subprocess(cmd)
-
-    #Visualize the results
-    if success:
-        time.sleep(1)
-        stat_result_paths = [{"path": f'{results_dir}/stats_stats.csv', "config": {"provider": provider_name, "model": model_name}}]
-        #visualize_comparative_results(stat_result_paths, results_dir)
-
-    time.sleep(25)
+if __name__ == "__main__":
+    main()
