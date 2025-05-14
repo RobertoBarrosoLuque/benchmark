@@ -2,7 +2,9 @@ import os
 import pandas as pd
 import re
 import argparse
+from pathlib import Path
 
+_BASE_DIR = Path(__file__).parents[0] / 'results'
 
 def extract_concurrency(dirname):
     match = re.search(r'(\d+)u-', dirname)
@@ -11,7 +13,7 @@ def extract_concurrency(dirname):
 
 def process_stats(base_dir, output_size, model_name: str):
     results = []
-    pattern = f'{model_name}-{output_size}-'
+    pattern = f'{model_name}{output_size}-'
 
     # Find all relevant directories
     for dirname in os.listdir(base_dir):
@@ -54,7 +56,7 @@ def process_stats(base_dir, output_size, model_name: str):
         results_df = results_df.sort_values('Concurrency')
 
         # Save to CSV
-        output_file = f'latency_stats_output_{output_size}.csv'
+        output_file = _BASE_DIR / f'{pattern}latency_stats_output_{output_size}.csv'
         results_df.to_csv(output_file, index=False)
         print(f"Created {output_file}")
     else:
@@ -70,10 +72,8 @@ def main():
 
     args = parser.parse_args()
 
-    base_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), 'results')
-
     # Process with the specified output size
-    process_stats(base_dir, args.output_length, args.model_name)
+    process_stats(_BASE_DIR, args.output_length, args.model_name)
 
 
 if __name__ == "__main__":
