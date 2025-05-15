@@ -11,14 +11,20 @@ def extract_concurrency(dirname):
     return int(match.group(1)) if match else 0
 
 
-def process_stats(base_dir, output_size, model_name: str):
+def process_stats(args: argparse.Namespace):
+
+    model_name = args.model_name
+    output_size = args.output_length
+
     results = []
     pattern = f'{model_name}{output_size}-'
 
+    search_dir = _BASE_DIR / "accounts" / args.account / "models"
     # Find all relevant directories
-    for dirname in os.listdir(base_dir):
+    print(f"..................... SEARCH DIR: {search_dir} .....................")
+    for dirname in os.listdir(search_dir):
         if pattern in dirname and ('min' in dirname or '5' in dirname):  # Allow different duration formats
-            stats_file = os.path.join(base_dir, dirname, 'stats_stats.csv')
+            stats_file = os.path.join(search_dir, dirname, 'stats_stats.csv')
             if os.path.exists(stats_file):
                 # Read the stats file
                 df = pd.read_csv(stats_file)
@@ -69,11 +75,15 @@ def main():
                         help='Output token length used in the benchmarks')
     parser.add_argument('--model-name', type=str, required=True,
                         help='Name of the model used in the benchmarks')
+    parser.add_argument(
+        "--account", type=str, required=False, default="fireworks",
+        help="Name of the account to process (default: fireworks)"
+    )
 
     args = parser.parse_args()
 
     # Process with the specified output size
-    process_stats(_BASE_DIR, args.output_length, args.model_name)
+    process_stats(args)
 
 
 if __name__ == "__main__":

@@ -2,7 +2,6 @@ from dotenv import load_dotenv
 
 load_dotenv()
 import os
-import datetime
 import subprocess
 import time
 import argparse
