@@ -15,6 +15,7 @@ def process_stats(args: argparse.Namespace):
 
     model_name = args.model_name
     output_size = args.output_length
+    input_size = args.input_length
 
     results = []
     pattern = f'{model_name}{output_size}-'
@@ -28,7 +29,8 @@ def process_stats(args: argparse.Namespace):
             if os.path.exists(stats_file):
                 # Read the stats file
                 df = pd.read_csv(stats_file)
-                # Get both metric rows
+
+                total_latency_row = df[df['Name'] == 'total_latency'].iloc[0]
                 lpt_row = df[df['Name'] == 'latency_per_token'].iloc[0]
                 ttft_row = df[df['Name'] == 'time_to_first_token'].iloc[0]
 
@@ -39,14 +41,18 @@ def process_stats(args: argparse.Namespace):
                 result = {
                     'Concurrency': concurrency,
                     'Requests/s': lpt_row['Requests/s'],
-                    'LPT Median (ms)': lpt_row['Median Response Time'],
+                    'Latency Average': total_latency_row['Average Response Time'],
+                    'Latency p50 (ms)': total_latency_row['50%'],
+                    'Latency p90 (ms)': total_latency_row['90%'],
+                    'Latency p95 (ms)': total_latency_row['95%'],
+                    'Latency p99 (ms)': total_latency_row['99%'],
+                    'Latency p99.9 (ms)': total_latency_row['99.9%'],
                     'LPT Average (ms)': lpt_row['Average Response Time'],
                     'LPT p50 (ms)': lpt_row['50%'],
                     'LPT p90 (ms)': lpt_row['90%'],
                     'LPT p95 (ms)': lpt_row['95%'],
                     'LPT p99 (ms)': lpt_row['99%'],
                     'LPT p99.9 (ms)': lpt_row['99.9%'],
-                    'TTFT Median (ms)': ttft_row['Median Response Time'],
                     'TTFT Average (ms)': ttft_row['Average Response Time'],
                     'TTFT p50 (ms)': ttft_row['50%'],
                     'TTFT p90 (ms)': ttft_row['90%'],
@@ -61,8 +67,8 @@ def process_stats(args: argparse.Namespace):
     if not results_df.empty:
         results_df = results_df.sort_values('Concurrency')
 
-        # Save to CSV
-        output_file = _BASE_DIR / f'{pattern}latency_stats_output_{output_size}.csv'
+        # Save to CSV with standardized filename
+        output_file = _BASE_DIR / f'{model_name}_input{input_size}_output{output_size}_latency_stats.csv'
         results_df.to_csv(output_file, index=False)
         print(f"Created {output_file}")
     else:
@@ -72,9 +78,11 @@ def process_stats(args: argparse.Namespace):
 def main():
     parser = argparse.ArgumentParser(description='Extract latency statistics from benchmark results')
     parser.add_argument('--output-length', type=int, required=True,
-                        help='Output token length used in the benchmarks')
+                        help = 'Output token length used in the benchmarks')
+    parser.add_argument('--input-length', type=int, required=True,
+                        help = 'Input token length used in the benchmarks')
     parser.add_argument('--model-name', type=str, required=True,
-                        help='Name of the model used in the benchmarks')
+                        help = 'Name of the model used in the benchmarks')
     parser.add_argument(
         "--account", type=str, required=False, default="fireworks",
         help="Name of the account to process (default: fireworks)"
