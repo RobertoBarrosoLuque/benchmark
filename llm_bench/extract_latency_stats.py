@@ -30,6 +30,10 @@ def process_stats(args: argparse.Namespace):
                 # Read the stats file
                 df = pd.read_csv(stats_file)
 
+                if df.empty or df.shape[0] <= 1:
+                    print(f"WARNING dataframe for {dirname} is empty")
+                    continue
+
                 total_latency_row = df[df['Name'] == 'total_latency'].iloc[0]
                 lpt_row = df[df['Name'] == 'latency_per_token'].iloc[0]
                 ttft_row = df[df['Name'] == 'time_to_first_token'].iloc[0]
