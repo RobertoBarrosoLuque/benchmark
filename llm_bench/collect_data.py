@@ -14,6 +14,13 @@ def main():
     parser.add_argument('--concurrency', nargs='+', type=int,
                         default=[1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 20, 30, 40, 50, 60, 70, 80, 90, 100],
                         help='List of concurrent workers (e.g., 1 10 20 30)')
+    parser.add_argument(
+        "--qps",
+        nargs='+',
+        type=int,
+        default=None,
+        help="Enabled 'fixed QPS' mode where requests are issues at the specified rate regardless of how long the processing takes. In this case --users and --spawn-rate need to be set to a sufficiently high value (e.g. 100)",
+    )
     parser.add_argument('--spawn-rate', type=int, default=100,
                         help='Rate of spawning new workers (workers/second)')
     parser.add_argument('--prompt-length', type=int, required=True,
@@ -29,6 +36,7 @@ def main():
     parser.add_argument('--api-key', help='Fireworks API key (overrides .env file)')
     parser.add_argument('--host', default="https://api.fireworks.ai/inference",
                         help='Host URL for the API')
+    parser.add_argument('--embeddings', action='store_true', help='Run with embeddings endpoint')
 
     args = parser.parse_args()
 
