@@ -68,7 +68,15 @@ def main():
     # Add API key if provided
     if args.api_key:
         collect_cmd.extend(["--api-key", args.api_key])
-    
+
+    # Add embeddings flag if provided
+    if args.embeddings:
+        collect_cmd.append("--embeddings")
+
+    # Add QPS if provided
+    if args.qps is not None:
+        collect_cmd.extend(["--qps"] + [str(q) for q in args.qps])
+
     if not run_command(collect_cmd, "Data Collection"):
         sys.exit(1)
     

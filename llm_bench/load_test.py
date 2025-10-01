@@ -110,6 +110,21 @@ class JsonlDataset:
                 yield json.loads(line), 0
 
 
+class DummyTextDataset:
+    """Simple dataset that generates dummy text of specified token length"""
+    def __init__(self, num_tokens: int):
+        self.num_tokens = num_tokens
+        # Create a simple repeated text string to approximate the token count
+        # Using "word " repeated - each occurrence is roughly 1 token
+        self.text = "word " * num_tokens
+
+    def __next__(self):
+        return self.text, self.num_tokens
+
+    def __iter__(self):
+        return self
+
+
 class DatasetHolder:
     _instance = None
 
@@ -118,9 +133,14 @@ class DatasetHolder:
         if options.dataset.startswith("@"):
             return JsonlDataset(options.dataset[1:])
         elif options.dataset == "limerics":
+            # For embeddings, use dummy dataset if no tokenizer is provided
+            if options.embeddings and options.tokenizer is None:
+                print("Using DummyTextDataset for embeddings (no tokenizer required)")
+                return DummyTextDataset(num_tokens=options.prompt_tokens)
+
             assert (
                 options.tokenizer is not None
-            ), "--tokenizer is required for limerics dataset"
+            ), "--tokenizer is required for limerics dataset (use --embeddings to skip tokenizer requirement)"
             return LimericsDataset(
                 path=os.path.join(
                     os.path.dirname(os.path.abspath(__file__)), "limericks.txt"
@@ -400,7 +420,9 @@ class OpenAIProvider(BaseProvider):
         choice = data["choices"][0]
         if self.parsed_options.chat:
             if self.parsed_options.stream:
-                text = choice["delta"].get("content", "")
+                text = choice["delta"].get("reasoning_content", "") + choice[
+                    "delta"
+                ].get("content", "")
             else:
                 text = choice["message"]["content"]
         else:
