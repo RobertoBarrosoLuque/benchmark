@@ -44,6 +44,7 @@ def main():
 
     ## Add boolean  --embeddings
     parser.add_argument('--embeddings', action='store_true', help='Run with embeddings endpoint')
+    parser.add_argument('--tokenizer', help='Specify HF tokenizer to use for validating the output of the model')
 
     args = parser.parse_args()
     
@@ -76,6 +77,10 @@ def main():
     # Add QPS if provided
     if args.qps is not None:
         collect_cmd.extend(["--qps"] + [str(q) for q in args.qps])
+
+    # Add tokenizer if provided
+    if args.tokenizer:
+        collect_cmd.extend(["--tokenizer", args.tokenizer])
 
     if not run_command(collect_cmd, "Data Collection"):
         sys.exit(1)

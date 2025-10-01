@@ -37,6 +37,7 @@ def main():
     parser.add_argument('--host', default="https://api.fireworks.ai/inference",
                         help='Host URL for the API')
     parser.add_argument('--embeddings', action='store_true', help='Run with embeddings endpoint')
+    parser.add_argument('--tokenizer', help='Specify HF tokenizer to use for validating the output of the model')
 
     args = parser.parse_args()
 
@@ -110,6 +111,10 @@ def main():
         # Add QPS if in QPS mode
         if iteration_mode == "qps":
             cmd.extend(["--qps", str(value)])
+
+        # Add tokenizer if provided
+        if args.tokenizer:
+            cmd.extend(["--tokenizer", args.tokenizer])
 
         # Add load_test.py as the locust file
         locust_file = os.path.join(os.path.dirname(__file__), "load_test.py")
