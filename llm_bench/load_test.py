@@ -769,6 +769,7 @@ class LLMUser(HttpUser):
             alpha=self.environment.parsed_options.max_tokens_range,
         )
         self.temperature = self.environment.parsed_options.temperature
+        self.prompt_tokenizer_tokens = None
 
         logging_params = {
             # TODO: add some server info with git version
