@@ -52,6 +52,8 @@ class LimericsDataset:
     ):
         self._tokenizer = transformers.AutoTokenizer.from_pretrained(tokenizer_path)
         self._num_tokens = num_tokens
+        self._chat = chat
+        self._common_tokens = common_tokens
 
         self._all_limericks = []
         with open(path, "r") as f:
@@ -96,6 +98,46 @@ class LimericsDataset:
     def __iter__(self):
         return self
 
+    def generate_cached_jsonl(self, num_samples: int = 1000) -> str:
+        """
+        Generate a cached JSONL dataset file from limericks.
+        Returns the path to the generated file.
+
+        This allows running the benchmark without needing a tokenizer at runtime,
+        while still using realistic text to avoid MoE expert imbalance.
+        """
+        # Create cache directory
+        cache_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), ".dataset_cache")
+        os.makedirs(cache_dir, exist_ok=True)
+
+        # Generate cache filename based on parameters
+        cache_filename = f"limericks_{self._num_tokens}tok_{'chat' if self._chat else 'compl'}_cache{self._common_tokens}.jsonl"
+        cache_path = os.path.join(cache_dir, cache_filename)
+
+        # Check if cache already exists
+        if os.path.exists(cache_path):
+            print(f"Using cached dataset: {cache_path}")
+            return cache_path
+
+        print(f"Generating cached dataset with {num_samples} samples: {cache_path}")
+
+        with open(cache_path, "w") as f:
+            for i in range(num_samples):
+                prompt, actual_tokens = next(self)
+
+                if self._chat:
+                    sample = {"messages": [{"role": "user", "content": prompt}]}
+                else:
+                    sample = {"prompt": prompt}
+
+                f.write(json.dumps(sample) + "\n")
+
+                if (i + 1) % 100 == 0:
+                    print(f"  Generated {i + 1}/{num_samples} samples...")
+
+        print(f"Cache generation complete: {cache_path}")
+        return cache_path
+
 
 class JsonlDataset:
     def __init__(self, path: str):
@@ -110,6 +152,82 @@ class JsonlDataset:
                 yield json.loads(line), 0
 
 
+class DummyTextDataset:
+    """Simple dataset that generates dummy text of specified token length"""
+    def __init__(self, num_tokens: int):
+        self.num_tokens = num_tokens
+        # Create a simple repeated text string to approximate the token count
+        # Using "word " repeated - each occurrence is roughly 1 token
+        self.text = "word " * num_tokens
+
+    def __next__(self):
+        return self.text, self.num_tokens
+
+    def __iter__(self):
+        return self
+
+
+class LimericsDatasetNoTokenizer:
+    """
+    Limericks dataset that doesn't require a tokenizer.
+    Uses a simple heuristic: 1 token ≈ 4 characters for English text.
+    This is less accurate but allows using realistic text datasets without downloading tokenizers,
+    which helps avoid MoE expert imbalance issues while maintaining ease of use.
+    """
+    _PROMPT = "\n\nTranslate the limericks above to Spanish, then re-write limericks using different styles. Do it 10 times."
+
+    def __init__(
+        self,
+        path: str,
+        num_tokens: int,
+        common_tokens: int,
+        chat: bool,
+    ):
+        self._num_tokens = num_tokens
+        self._chat = chat
+        self._common_tokens = common_tokens
+
+        # Load all limericks with estimated token counts
+        self._all_limericks = []
+        with open(path, "r") as f:
+            text = f.read()
+            lims = text.split("\n\n")
+            for lim in lims:
+                if lim.strip():
+                    # Heuristic: ~4 chars per token for English text
+                    estimated_tokens = len(lim) // 4
+                    self._all_limericks.append((lim, estimated_tokens))
+
+        # Build common prefix for prompt caching
+        self._prefix = ""
+        self._suffix = self._PROMPT
+        self._prefix_suffix_tokens = len(self._PROMPT) // 4
+
+        while self._prefix_suffix_tokens < common_tokens:
+            lim, num_tokens = random.choice(self._all_limericks)
+            self._prefix += lim + "\n\n"
+            self._prefix_suffix_tokens += num_tokens
+
+        # Estimate chat template overhead (rough approximation)
+        if chat:
+            self._prefix_suffix_tokens += 10  # rough estimate for chat template tokens
+
+    def __next__(self):
+        prompt_tokens = self._prefix_suffix_tokens
+        prompt = self._prefix
+
+        while prompt_tokens < self._num_tokens:
+            lim, num_tokens = random.choice(self._all_limericks)
+            prompt += lim + "\n\n"
+            prompt_tokens += num_tokens
+
+        prompt += self._suffix
+        return prompt, prompt_tokens
+
+    def __iter__(self):
+        return self
+
+
 class DatasetHolder:
     _instance = None
 
@@ -118,17 +236,33 @@ class DatasetHolder:
         if options.dataset.startswith("@"):
             return JsonlDataset(options.dataset[1:])
         elif options.dataset == "limerics":
-            assert (
-                options.tokenizer is not None
-            ), "--tokenizer is required for limerics dataset"
-            return LimericsDataset(
-                path=os.path.join(
-                    os.path.dirname(os.path.abspath(__file__)), "limericks.txt"
-                ),
-                tokenizer_path=options.tokenizer,
-                chat=options.chat,
+            limericks_path = os.path.join(
+                os.path.dirname(os.path.abspath(__file__)), "limericks.txt"
+            )
+
+            # For embeddings without tokenizer, use dummy dataset
+            if options.embeddings and options.tokenizer is None:
+                print("Using DummyTextDataset for embeddings (no tokenizer required)")
+                return DummyTextDataset(num_tokens=options.prompt_tokens)
+
+            # If tokenizer is provided, use accurate tokenization
+            if options.tokenizer is not None:
+                print("Using LimericsDataset with tokenizer for accurate token counts")
+                return LimericsDataset(
+                    path=limericks_path,
+                    tokenizer_path=options.tokenizer,
+                    chat=options.chat,
+                    num_tokens=options.prompt_tokens,
+                    common_tokens=options.prompt_cache_max_len,
+                )
+
+            # No tokenizer provided - use limericks with heuristic token counting
+            print("Using LimericsDatasetNoTokenizer (no tokenizer required, using ~4 chars/token heuristic)")
+            return LimericsDatasetNoTokenizer(
+                path=limericks_path,
                 num_tokens=options.prompt_tokens,
                 common_tokens=options.prompt_cache_max_len,
+                chat=options.chat,
             )
         else:
             raise ValueError(f"Unknown dataset: {options.dataset}")
@@ -635,6 +769,7 @@ class LLMUser(HttpUser):
             alpha=self.environment.parsed_options.max_tokens_range,
         )
         self.temperature = self.environment.parsed_options.temperature
+        self.prompt_tokenizer_tokens = None
 
         logging_params = {
             # TODO: add some server info with git version
@@ -782,7 +917,7 @@ class LLMUser(HttpUser):
                             done = True
                             continue
                     data = orjson.loads(chunk)
-                    out = self.provider_formatter.parse_output_json(data)
+                    out = self.provider_formatter.parse_output_json(data, prompt)
                     if out.usage_tokens:
                         total_usage_tokens = (
                             total_usage_tokens or 0
