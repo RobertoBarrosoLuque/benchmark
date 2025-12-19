@@ -534,9 +534,10 @@ class OpenAIProvider(BaseProvider):
         choice = data["choices"][0]
         if self.parsed_options.chat:
             if self.parsed_options.stream:
-                text = choice["delta"].get("reasoning_content", "") + choice[
-                    "delta"
-                ].get("content", "")
+                # Use `or ""` to handle null values (not just missing keys)
+                reasoning_content = choice["delta"].get("reasoning_content") or ""
+                content = choice["delta"].get("content") or ""
+                text = reasoning_content + content
             else:
                 text = choice["message"]["content"]
         else:
@@ -562,6 +563,9 @@ class FireworksProvider(OpenAIProvider):
         if not self.parsed_options.embeddings:
             data["min_tokens"] = max_tokens
         data["prompt_cache_max_len"] = self.parsed_options.prompt_cache_max_len
+        # Add reasoning_effort for thinking models (e.g., Qwen3)
+        if self.parsed_options.reasoning_effort is not None:
+            data["reasoning_effort"] = self.parsed_options.reasoning_effort
         return data
 
 
@@ -1188,6 +1192,13 @@ def init_parser(parser):
         default=1,
         type=int,
         help="How many sequences to generate (makes sense to use with non-zero temperature).",
+    )
+    parser.add_argument(
+        "--reasoning-effort",
+        type=str,
+        choices=["none", "low", "medium", "high"],
+        default=None,
+        help="Control reasoning effort for thinking models (e.g., Qwen3). Set to 'none' to disable thinking mode for fair latency comparison.",
     )
 
 
