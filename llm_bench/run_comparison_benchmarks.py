@@ -40,7 +40,7 @@ WORKLOADS = [
 ]
 
 # Benchmark settings
-CONCURRENCY_LEVELS = [1, 2]
+CONCURRENCY_LEVELS = [5, 10, 15, 20, 25, 30]
 DURATION = "3min"
 
 

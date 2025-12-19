@@ -44,38 +44,52 @@ def process_stats(model_name: str, input_len: int, output_len: int) -> pd.DataFr
             print(f"  Empty stats in {dirname}")
             continue
 
-        try:
-            total_latency_row = df[df['Name'] == 'total_latency'].iloc[0]
-            lpt_row = df[df['Name'] == 'latency_per_token'].iloc[0]
-            ttft_row = df[df['Name'] == 'time_to_first_token'].iloc[0]
-        except (IndexError, KeyError) as e:
-            print(f"  Missing metrics in {dirname}: {e}")
+        def get_metric_row(name):
+            rows = df[df['Name'] == name]
+            return rows.iloc[0] if len(rows) > 0 else None
+
+        total_latency_row = get_metric_row('total_latency')
+        lpt_row = get_metric_row('latency_per_token')
+        ttft_row = get_metric_row('time_to_first_token')
+
+        if total_latency_row is None:
+            print(f"  Missing total_latency in {dirname}")
             continue
 
         concurrency = extract_concurrency(dirname)
 
         result = {
             'Concurrency': concurrency,
-            'Requests/s': lpt_row['Requests/s'],
+            'Requests/s': total_latency_row['Requests/s'],
             'Latency Average': total_latency_row['Average Response Time'],
             'Latency p50 (ms)': total_latency_row['50%'],
             'Latency p90 (ms)': total_latency_row['90%'],
             'Latency p95 (ms)': total_latency_row['95%'],
             'Latency p99 (ms)': total_latency_row['99%'],
             'Latency p99.9 (ms)': total_latency_row['99.9%'],
-            'LPT Average (ms)': lpt_row['Average Response Time'],
-            'LPT p50 (ms)': lpt_row['50%'],
-            'LPT p90 (ms)': lpt_row['90%'],
-            'LPT p95 (ms)': lpt_row['95%'],
-            'LPT p99 (ms)': lpt_row['99%'],
-            'LPT p99.9 (ms)': lpt_row['99.9%'],
-            'TTFT Average (ms)': ttft_row['Average Response Time'],
-            'TTFT p50 (ms)': ttft_row['50%'],
-            'TTFT p90 (ms)': ttft_row['90%'],
-            'TTFT p95 (ms)': ttft_row['95%'],
-            'TTFT p99 (ms)': ttft_row['99%'],
-            'TTFT p99.9 (ms)': ttft_row['99.9%']
         }
+
+        # Add LPT metrics if available
+        if lpt_row is not None:
+            result.update({
+                'LPT Average (ms)': lpt_row['Average Response Time'],
+                'LPT p50 (ms)': lpt_row['50%'],
+                'LPT p90 (ms)': lpt_row['90%'],
+                'LPT p95 (ms)': lpt_row['95%'],
+                'LPT p99 (ms)': lpt_row['99%'],
+                'LPT p99.9 (ms)': lpt_row['99.9%'],
+            })
+
+        # Add TTFT metrics if available
+        if ttft_row is not None:
+            result.update({
+                'TTFT Average (ms)': ttft_row['Average Response Time'],
+                'TTFT p50 (ms)': ttft_row['50%'],
+                'TTFT p90 (ms)': ttft_row['90%'],
+                'TTFT p95 (ms)': ttft_row['95%'],
+                'TTFT p99 (ms)': ttft_row['99%'],
+                'TTFT p99.9 (ms)': ttft_row['99.9%'],
+            })
         results.append(result)
         print(f"  Loaded: {dirname} (concurrency={concurrency})")
 
