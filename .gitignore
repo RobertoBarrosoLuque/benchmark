@@ -5,3 +5,6 @@ llm_bench/results/
 .env
 env/
 .idea/
+*.xlsx
+*.html
+*.pdf
