@@ -18,6 +18,9 @@ import io
 import itertools
 from PIL import Image
 import transformers
+import re
+import gevent
+from locust.util.timespan import parse_timespan as _locust_parse_timespan
 
 try:
     import locust_plugins
@@ -66,12 +69,14 @@ class LimericsDataset:
         self._prefix = ""
         self._suffix = self._PROMPT
         self._prefix_suffix_tokens = len(self._tokenizer.encode(self._PROMPT))
+        # Use deterministic selection (sequential iteration) to ensure all workers
+        # get the same prefix for the same common_tokens value
+        idx = 0
         while self._prefix_suffix_tokens < common_tokens:
-            lim, num_tokens = self._all_limericks[
-                random.randint(0, len(self._all_limericks) - 1)
-            ]
+            lim, num_tokens = self._all_limericks[idx % len(self._all_limericks)]
             self._prefix += lim + "\n\n"
             self._prefix_suffix_tokens += num_tokens
+            idx += 1
 
         if chat:
             empty_tempalate_tokens = self._tokenizer.apply_chat_template(
@@ -140,16 +145,40 @@ class LimericsDataset:
 
 
 class JsonlDataset:
-    def __init__(self, path: str):
+    def __init__(
+        self,
+        path: str,
+        shuffle_seed: Optional[int] = None,
+        dataset_limit: Optional[int] = None,
+    ):
         self.path = path
+        self.shuffle_seed = shuffle_seed
+        self.dataset_limit = dataset_limit
 
     def __iter__(self):
         return itertools.cycle(self._read_data())
 
     def _read_data(self):
+        # Read all data into a list first (needed for shuffling and limiting)
+        data = []
         with open(self.path, "r") as f:
             for line in f:
-                yield json.loads(line), 0
+                data.append((json.loads(line), 0))
+
+        # Shuffle if seed is provided
+        if self.shuffle_seed is not None:
+            rng = random.Random(self.shuffle_seed)
+            rng.shuffle(data)
+            print(f"Shuffled dataset with seed {self.shuffle_seed}")
+
+        # Limit dataset size if specified
+        if self.dataset_limit is not None:
+            data = data[: self.dataset_limit]
+            print(f"Limited dataset to first {len(data)} items")
+
+        # Yield all items
+        for item in data:
+            yield item
 
 
 class DummyTextDataset:
@@ -234,7 +263,11 @@ class DatasetHolder:
     @classmethod
     def _create_dataset(cls, options: argparse.Namespace):
         if options.dataset.startswith("@"):
-            return JsonlDataset(options.dataset[1:])
+            return JsonlDataset(
+                options.dataset[1:],
+                shuffle_seed=getattr(options, "dataset_shuffle_seed", None),
+                dataset_limit=getattr(options, "dataset_limit", None),
+            )
         elif options.dataset == "limerics":
             limericks_path = os.path.join(
                 os.path.dirname(os.path.abspath(__file__)), "limericks.txt"
@@ -381,6 +414,12 @@ class InitTracker:
     logging_params = None
     environment = None
     tokenizer = None
+    deferred_run_time_seconds = None
+    deferred_max_requests = None
+    request_count = 0
+    stop_scheduled = False
+    max_requests_stop_scheduled = False
+    stats_reset_done = False
 
     @classmethod
     def notify_init(cls, environment, logging_params):
@@ -395,26 +434,60 @@ class InitTracker:
 
     @classmethod
     def notify_first_request(cls):
-        if (
-            cls.environment.parsed_options.qps is not None
-            and cls.first_request_done == 0
-        ):
-            # if in QPS mode, reset after first successful request comes back
-            cls.reset_stats()
         cls.first_request_done += 1
-        if (
-            cls.environment.parsed_options.qps is not None
-            and cls.first_request_done == 0
-            and cls.users == cls.first_request_done
-        ):
-            # if in fixed load mode, reset after all users issued one request (we're in a steady state)
-            cls.reset_stats()
+
+    @classmethod
+    def notify_request_complete(cls):
+        """Notify that a request has completed and check if we should stop."""
+        if cls.deferred_max_requests is None:
+            return
+        cls.request_count += 1
+        print(f"Request {cls.request_count}/{cls.deferred_max_requests} completed")
+        if cls.request_count >= cls.deferred_max_requests:
+            print(
+                f"Reached max requests limit ({cls.deferred_max_requests}), stopping test"
+            )
+            cls.stop_scheduled = True
+            # Use a small delay to ensure the current request completes
+            gevent.spawn_later(0.1, cls._do_quit)
+
+    @classmethod
+    def _do_quit(cls):
+        """Actually stop the runner."""
+        if not cls.environment:
+            print("WARNING: environment is None, cannot stop")
+            return
+        if not cls.environment.runner:
+            print("WARNING: runner is None, cannot stop")
+            return
+
+        runner = cls.environment.runner
+        try:
+            if hasattr(runner, "stop"):
+                runner.stop()
+            runner.quit()
+        except Exception as e:
+            print(f"Failed to stop runner: {e}")
+
 
     @classmethod
     def notify_spawning_complete(cls, user_count):
         cls.users = user_count
-        if cls.users == cls.first_request_done:
+        # Start steady-state measurement exactly when all users have spawned
+        if not cls.stats_reset_done:
             cls.reset_stats()
+            cls.stats_reset_done = True
+        # If -t/--run-time was provided, schedule test stop relative to spawn complete
+        if (
+            cls.deferred_run_time_seconds is not None
+            and not cls.stop_scheduled
+            and cls.environment is not None
+            and cls.environment.runner is not None
+        ):
+            delay = float(cls.deferred_run_time_seconds)
+            print(f"Scheduling stop {delay}s after spawning complete (deferred -t)")
+            gevent.spawn_later(delay, cls.environment.runner.quit)
+            cls.stop_scheduled = True
 
     @classmethod
     def reset_stats(cls):
@@ -438,6 +511,75 @@ class InitTracker:
 
 
 events.spawning_complete.add_listener(InitTracker.notify_spawning_complete)
+
+
+def _parse_run_time_to_seconds(run_time_value):
+    """Parse Locust -t/--run-time value into seconds (float). Supports both
+    already-parsed numeric values and human strings like '30s', '5m', '1h30m'.
+    """
+    if not run_time_value:
+        return None
+    # If Locust already parsed it to a number (seconds), just use it
+    if isinstance(run_time_value, (int, float)):
+        return float(run_time_value)
+    # Try Locust's own parser first
+    if _locust_parse_timespan is not None:
+        try:
+            return float(_locust_parse_timespan(run_time_value))
+        except Exception:
+            pass
+    # Fallback simple parser for strings like '1h30m15s'
+    s = str(run_time_value).strip().lower()
+    total = 0.0
+    for value, unit in re.findall(r"(\d+)\s*([smhd])", s):
+        n = float(value)
+        if unit == "s":
+            total += n
+        elif unit == "m":
+            total += n * 60
+        elif unit == "h":
+            total += n * 3600
+        elif unit == "d":
+            total += n * 86400
+    if total == 0.0:
+        raise ValueError(f"Unable to parse run time value: {run_time_value}")
+    return total
+
+
+@events.init.add_listener
+def _defer_run_time_to_after_spawn(environment, **_kwargs):
+    """Capture -t/--run-time and --max-requests and defer them appropriately.
+
+    For run-time: we store the desired duration, null out the original option to prevent
+    Locust from scheduling an early stop, and then schedule our own stop in
+    InitTracker.notify_spawning_complete.
+
+    For max-requests: we store the limit and check it after each request completes.
+    """
+    try:
+        run_time_value = getattr(environment.parsed_options, "run_time", None)
+    except Exception:
+        run_time_value = None
+    seconds = _parse_run_time_to_seconds(run_time_value) if run_time_value else None
+    if seconds:
+        # Disable Locust's default run_time handling by clearing it
+        try:
+            environment.parsed_options.run_time = None
+        except Exception:
+            pass
+        InitTracker.deferred_run_time_seconds = seconds
+        InitTracker.environment = environment
+        print(f"Deferring -t/--run-time to start after spawning complete: {seconds}s")
+
+    # Capture max_requests if specified
+    try:
+        max_requests = getattr(environment.parsed_options, "max_requests", None)
+    except Exception:
+        max_requests = None
+    if max_requests is not None:
+        InitTracker.deferred_max_requests = max_requests
+        InitTracker.environment = environment
+        print(f"Will stop after {max_requests} requests complete")
 
 
 @dataclass
@@ -480,6 +622,11 @@ class OpenAIProvider(BaseProvider):
                 "model": self.model,
                 "input": prompt,
             }
+            # Add embeddings-specific parameters
+            if self.parsed_options.return_logits is not None:
+                data["return_logits"] = self.parsed_options.return_logits
+            if self.parsed_options.normalize is not None:
+                data["normalize"] = self.parsed_options.normalize
             return data
 
         data = {
@@ -493,6 +640,8 @@ class OpenAIProvider(BaseProvider):
             data["top_k"] = self.parsed_options.top_k
         if self.parsed_options.logprobs is not None:
             data["logprobs"] = self.parsed_options.logprobs
+        if self.parsed_options.reasoning_effort is not None:
+            data["reasoning_effort"] = self.parsed_options.reasoning_effort
         if isinstance(prompt, str):
             if self.parsed_options.chat:
                 if images is None:
@@ -518,12 +667,23 @@ class OpenAIProvider(BaseProvider):
             for k, v in prompt.items():
                 data[k] = v
 
+        # Clear last assistant message if requested
+        if (
+            self.parsed_options.clear_assistant
+            and "messages" in data
+            and isinstance(data["messages"], list)
+            and len(data["messages"]) > 0
+        ):
+            # Remove the last message if it's from assistant
+            if data["messages"][-1].get("role") == "assistant":
+                data["messages"].pop()
+
         return data
 
-    def parse_output_json(self, data, prompt):
+    def parse_output_json(self, data):
         if self.parsed_options.embeddings:
             return ChunkMetadata(
-                text="",
+                text=data["data"][0]["embedding"],
                 logprob_tokens=None,
                 usage_tokens=None,
                 prompt_usage_tokens=None,
@@ -534,12 +694,14 @@ class OpenAIProvider(BaseProvider):
         choice = data["choices"][0]
         if self.parsed_options.chat:
             if self.parsed_options.stream:
-                # Use `or ""` to handle null values (not just missing keys)
-                reasoning_content = choice["delta"].get("reasoning_content") or ""
-                content = choice["delta"].get("content") or ""
-                text = reasoning_content + content
+                block = choice["delta"]
             else:
-                text = choice["message"]["content"]
+                block = choice["message"]
+            text = (
+                (block.get("reasoning", "") or "")
+                + (block.get("reasoning_content", "") or "")
+                + (block.get("content", "") or "")
+            )
         else:
             text = choice["text"]
 
@@ -560,8 +722,6 @@ class OpenAIProvider(BaseProvider):
 class FireworksProvider(OpenAIProvider):
     def format_payload(self, prompt, max_tokens, images):
         data = super().format_payload(prompt, max_tokens, images)
-        if not self.parsed_options.embeddings:
-            data["min_tokens"] = max_tokens
         data["prompt_cache_max_len"] = self.parsed_options.prompt_cache_max_len
         # Add reasoning_effort for thinking models (e.g., Qwen3)
         if self.parsed_options.reasoning_effort is not None:
@@ -884,6 +1044,10 @@ class LLMUser(HttpUser):
         max_tokens = self.max_tokens_sampler.sample()
         prompt, prompt_usage_tokens, images = self._get_input()
         data = self.provider_formatter.format_payload(prompt, max_tokens, images)
+        if self.environment.parsed_options.show_request:
+            print("--- Request payload ---")
+            print(json.dumps(data, indent=2))
+            print("---")
         t_start = time.perf_counter()
 
         with self.client.post(
@@ -893,6 +1057,7 @@ class LLMUser(HttpUser):
             catch_response=True,
         ) as response:
             combined_text = ""
+            done_empty_chunk = False
             done = False
             total_usage_tokens = None
             total_logprob_tokens = None
@@ -911,6 +1076,11 @@ class LLMUser(HttpUser):
                     now = time.perf_counter()
                     if self.provider_formatter.parsed_options.embeddings:
                         t_first_token = now
+                        if self.environment.parsed_options.show_response:
+                            out = self.provider_formatter.parse_output_json(
+                                orjson.loads(chunk)
+                            )
+                            combined_text = out.text
                         break
                     if self.stream:
                         assert chunk.startswith(
@@ -920,12 +1090,17 @@ class LLMUser(HttpUser):
                         if chunk.strip() == b"[DONE]":
                             done = True
                             continue
+                    if done_empty_chunk:
+                        print(
+                            f"WARNING: Received more chunks after the trailing last chunk: {chunk}"
+                        )
                     data = orjson.loads(chunk)
-                    out = self.provider_formatter.parse_output_json(data, prompt)
+                    if not data.get("choices"):
+                        done_empty_chunk = True
+                        continue
+                    out = self.provider_formatter.parse_output_json(data)
                     if out.usage_tokens:
-                        total_usage_tokens = (
-                            total_usage_tokens or 0
-                        ) + out.usage_tokens
+                        total_usage_tokens = out.usage_tokens
                     if out.prompt_usage_tokens:
                         prompt_usage_tokens = out.prompt_usage_tokens
                     combined_text += out.text
@@ -942,7 +1117,10 @@ class LLMUser(HttpUser):
                     print(f"Failed to parse response: {chunk} with error {repr(e)}")
                     response.failure(e)
                     return
-            assert t_first_token is not None, "empty response received"
+            if t_first_token is None:
+                response.failure(Exception("empty response received"))
+                return
+
             if (
                 (total_logprob_tokens is not None)
                 and (total_usage_tokens is not None)
@@ -990,13 +1168,21 @@ class LLMUser(HttpUser):
                     dur_total / num_tokens * 1000,
                     num_tokens,
                 )
-            prompt_tokens = prompt_usage_tokens or self.prompt_tokenizer_tokens
-            if prompt_tokens:
-                add_custom_metric("prompt_tokens", prompt_tokens)
+
+            if not self.provider_formatter.parsed_options.embeddings:
+                prompt_tokens = prompt_usage_tokens or self.prompt_tokenizer_tokens
+                if prompt_tokens:
+                    add_custom_metric("prompt_tokens", prompt_tokens)
+
+            # Mark response as success (required when using catch_response=True)
+            response.success()
 
             if not self.first_done:
                 self.first_done = True
                 InitTracker.notify_first_request()
+
+            # Notify request completion and check if we should stop
+            InitTracker.notify_request_complete()
 
 
 def parse_resolution(res_str):
@@ -1027,6 +1213,18 @@ def init_parser(parser):
         default="limerics",
     )
     parser.add_argument(
+        "--dataset-shuffle-seed",
+        type=int,
+        default=None,
+        help="Random seed for shuffling the dataset. If provided, the dataset will be shuffled with this seed before use. Useful for reproducible sampling.",
+    )
+    parser.add_argument(
+        "--dataset-limit",
+        type=int,
+        default=None,
+        help="Limit the dataset to the first N items after shuffling (if shuffle seed is provided). Useful for sampling a subset of a large dataset.",
+    )
+    parser.add_argument(
         "-m",
         "--model",
         env_var="MODEL",
@@ -1050,6 +1248,19 @@ def init_parser(parser):
         action=argparse.BooleanOptionalAction,
         default=False,
         help="Use /v1/embeddings API",
+    )
+    parser.add_argument(
+        "--return-logits",
+        type=int,
+        nargs="*",
+        default=None,
+        help="For embeddings: return per-token or per-class logits. Provide specific token/class indices, or empty list for all. Only works with certain models.",
+    )
+    parser.add_argument(
+        "--normalize",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="For embeddings: apply L2 normalization to activations when return_logits is None, or softmax to selected logits when return_logits is provided.",
     )
     parser.add_argument(
         "-p",
@@ -1173,6 +1384,12 @@ def init_parser(parser):
         help="Print the result of each generation",
     )
     parser.add_argument(
+        "--show-request",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Print the request payload for each request",
+    )
+    parser.add_argument(
         "-pcml",
         "--prompt-cache-max-len",
         env_var="PROMPT_CACHE_MAX_LEN",
@@ -1194,11 +1411,25 @@ def init_parser(parser):
         help="How many sequences to generate (makes sense to use with non-zero temperature).",
     )
     parser.add_argument(
+        "--max-requests",
+        type=int,
+        default=None,
+        help="Stop the test after the specified number of successful requests complete. "
+        "Useful for running a fixed number of requests regardless of time or dataset size.",
+    )
+    parser.add_argument(
         "--reasoning-effort",
         type=str,
-        choices=["none", "low", "medium", "high"],
         default=None,
-        help="Control reasoning effort for thinking models (e.g., Qwen3). Set to 'none' to disable thinking mode for fair latency comparison.",
+        help="Set the reasoning_effort parameter for the API request (e.g., 'none', 'low', 'medium', 'high'). "
+        "If not specified and using a JSONL dataset, will use the value from the dataset if present.",
+    )
+    parser.add_argument(
+        "--clear-assistant",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="If the last message in the messages array is from the assistant role, remove it. "
+        "This allows the model to generate new content instead of continuing from existing assistant content.",
     )
 
 
@@ -1220,6 +1451,7 @@ def _(environment, **kw):
     for metric_name in [
         "time_to_first_token",
         "latency_per_token",
+        "overall_latency_per_token",
         "num_tokens",
         "total_latency",
         "prompt_tokens",  # might overwrite the static value based on server side tokenization
