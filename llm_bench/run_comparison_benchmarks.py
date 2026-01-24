@@ -7,40 +7,24 @@ import pandas as pd
 # Configuration - Edit these to match your deployments
 DEPLOYMENTS = [
     {
-        "name": "Qwen3-8B-VL-Instruct",
-        "deployment_id": "accounts/pyroworks/deployedModels/qwen3-vl-8b-instruct-wtocxydw",
-        "model_name": "qwen3-vl-8b-instruct",
+        "name": "qwen3-4b-instruct vLLM",
+        "deployment_id": "accounts/pyroworks/deployments/hs51o6qo",
+        "model_name": "qwen3-4b-instruct-2507-vLLM",
     },
     {
-        "name": "Qwen3-8B",
-        "deployment_id": "accounts/pyroworks/deployedModels/qwen3-8b-lb2y987a",
-        "model_name": "qwen3-8b",
-        "reasoning_effort": "none",
-    },
-    {
-        "name": "Ministral-3-8B",
-        "deployment_id": "accounts/pyroworks/deployedModels/ministral-3-8b-instruct-2512-m001qgzp",
-        "model_name": "ministral-3-8b",
-    },
-    {
-        "name": "Ministral-3-14B",
-        "deployment_id": "accounts/pyroworks/deployedModels/ministral-3-14b-instruct-2512-re3bbuh2",
-        "model_name": "ministral-3-14b",
-    },
-    {
-        "name": "Gemma3-12B",
-        "deployment_id": "accounts/pyroworks/deployedModels/gemma-3-12b-it-n3df9f5k",
-        "model_name": "gemma-3-12b-it",
-    },
+        "name": "qwen3-4b-instruct FireAttention",
+        "deployment_id": "accounts/pyroworks/deployments/ibj6ln2l",
+        "model_name": "qwen3-4b-instruct-2507-FireAttention",
+    }
 ]
 
 WORKLOADS = [
-    {"name": "Long Context", "input_tokens": 3000, "output_tokens": 140},
-    {"name": "Short Context", "input_tokens": 400, "output_tokens": 20},
+    {"name": "P50 workload", "input_tokens": 915, "output_tokens": 12, "prompt_cache_max_len": 823},
+    {"name": "P90 workload", "input_tokens": 1274, "output_tokens": 22, "prompt_cache_max_len": 1152},
 ]
 
 # Benchmark settings
-CONCURRENCY_LEVELS = [5, 10, 15, 20, 25, 30]
+CONCURRENCY_LEVELS = [1]
 DURATION = "3min"
 
 
@@ -62,10 +46,14 @@ def run_benchmark(deployment: dict, workload: dict) -> bool:
     if "reasoning_effort" in deployment:
         cmd.extend(["--reasoning-effort", deployment["reasoning_effort"]])
 
+    if "prompt_cache_max_len" in workload:
+        cmd.extend(["--prompt-cache-max-len", str(workload["prompt_cache_max_len"])])
+
+    cache = workload.get('prompt_cache_max_len', 0)
     print(f"\n{'='*60}")
     print(f"Running benchmark:")
     print(f"  Model: {deployment['name']} ({deployment['model_name']})")
-    print(f"  Workload: {workload['name']} ({workload['input_tokens']} in / {workload['output_tokens']} out)")
+    print(f"  Workload: {workload['name']} ({workload['input_tokens']} in / {workload['output_tokens']} out, cache={cache})")
     print(f"{'='*60}")
 
     result = subprocess.run(cmd)
@@ -136,7 +124,8 @@ def main():
         print(f"  - {d['name']}{extra}")
     print(f"\nWorkloads: {len(WORKLOADS)}")
     for w in WORKLOADS:
-        print(f"  - {w['name']}: {w['input_tokens']} in / {w['output_tokens']} out")
+        cache = w.get('prompt_cache_max_len', 0)
+        print(f"  - {w['name']}: {w['input_tokens']} in / {w['output_tokens']} out (cache={cache})")
     print(f"\nConcurrency: {CONCURRENCY_LEVELS}")
     print(f"Duration: {DURATION}")
     print(f"\nTotal runs: {len(DEPLOYMENTS) * len(WORKLOADS)}")
