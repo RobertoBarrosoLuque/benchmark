@@ -17,14 +17,14 @@ DEPLOYMENTS = [
         "model_name": "qwen3-4b-instruct-2507-FireAttention",
     }
 ]
-
+# Configure edit this to match your workloads
 WORKLOADS = [
     {"name": "P50 workload", "input_tokens": 915, "output_tokens": 12, "prompt_cache_max_len": 823},
     {"name": "P90 workload", "input_tokens": 1274, "output_tokens": 22, "prompt_cache_max_len": 1152},
 ]
 
 # Benchmark settings
-CONCURRENCY_LEVELS = [1]
+CONCURRENCY_LEVELS = [1, 2, 4, 8, 16, 32, 64, 128]
 DURATION = "3min"
 
 
