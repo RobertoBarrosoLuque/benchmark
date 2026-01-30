@@ -729,6 +729,61 @@ class FireworksProvider(OpenAIProvider):
         return data
 
 
+class FireworksTRTProvider(OpenAIProvider):
+    """Provider for TRT-LLM deployments with client-side cache busting.
+
+    TRT-LLM doesn't support the prompt_cache_max_len API parameter.
+    Instead, we implement client-side cache busting by inserting unique
+    markers into prompts after the cacheable prefix.
+    """
+
+    def __init__(self, model, parsed_options):
+        super().__init__(model, parsed_options)
+        self._cache_bust_request_seq = 0
+        self._run_id = f"{time.time_ns()}_{random.randint(10000, 99999)}"
+
+    def _generate_cache_bust_marker(self) -> str:
+        """Generate unique marker to prevent full prompt cache hits."""
+        self._cache_bust_request_seq += 1
+        return (
+            f"[CACHE_BUST run={self._run_id} seq={self._cache_bust_request_seq} "
+            f"ts={time.time_ns()}]\n"
+        )
+
+    def _apply_cache_busting(self, prompt: str) -> str:
+        """Insert cache bust marker after cacheable prefix."""
+        cache_len = self.parsed_options.prompt_cache_max_len
+        if cache_len <= 0:
+            # No caching - bust at beginning
+            return self._generate_cache_bust_marker() + prompt
+
+        # Split at approximate token boundary (whitespace-delimited)
+        # Keep first ~cache_len "tokens" identical, insert marker after
+        tokens = prompt.split()
+        if len(tokens) <= cache_len:
+            return prompt  # Entire prompt is cacheable
+
+        prefix = " ".join(tokens[:cache_len])
+        suffix = " ".join(tokens[cache_len:])
+        return prefix + " " + self._generate_cache_bust_marker() + suffix
+
+    def format_payload(self, prompt, max_tokens, images):
+        data = super().format_payload(prompt, max_tokens, images)
+        # Do NOT add prompt_cache_max_len (not supported by TRT-LLM)
+
+        # Apply client-side cache busting to the prompt/messages
+        if "messages" in data:
+            for msg in data["messages"]:
+                if msg.get("role") == "user" and isinstance(msg.get("content"), str):
+                    msg["content"] = self._apply_cache_busting(msg["content"])
+        elif "prompt" in data and isinstance(data["prompt"], str):
+            data["prompt"] = self._apply_cache_busting(data["prompt"])
+
+        if self.parsed_options.reasoning_effort is not None:
+            data["reasoning_effort"] = self.parsed_options.reasoning_effort
+        return data
+
+
 class VllmProvider(OpenAIProvider):
     def format_payload(self, prompt, max_tokens, images):
         data = super().format_payload(prompt, max_tokens, images)
@@ -801,6 +856,7 @@ class TgiProvider(BaseProvider):
 
 PROVIDER_CLASS_MAP = {
     "fireworks": FireworksProvider,
+    "fireworks-trt": FireworksTRTProvider,
     "vllm": VllmProvider,
     "sglang": VllmProvider,
     "openai": OpenAIProvider,

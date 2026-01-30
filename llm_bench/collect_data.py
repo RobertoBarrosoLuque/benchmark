@@ -37,6 +37,8 @@ def main():
     parser.add_argument('--tokenizer', help='HF tokenizer for output validation')
     parser.add_argument('--reasoning-effort', type=str, choices=['none', 'low', 'medium', 'high'],
                         help='Reasoning effort for thinking models (e.g., Qwen3)')
+    parser.add_argument('--provider', default="fireworks",
+                        help='Provider type (fireworks, fireworks-trt, vllm, etc.)')
 
     args = parser.parse_args()
 
@@ -76,7 +78,7 @@ def main():
             "--headless",
             "--only-summary",
             "-H", args.host,
-            "--provider", "fireworks",
+            "--provider", args.provider,
             "--model", args.deployment_id,
             "--api-key", api_key,
             "-t", duration,
