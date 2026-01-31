@@ -7,25 +7,20 @@ import pandas as pd
 # Configuration - Edit these to match your deployments
 DEPLOYMENTS = [
     {
-        "name": "qwen3-4b-instruct vLLM",
-        "deployment_id": "accounts/pyroworks/deployments/hs51o6qo",
-        "model_name": "qwen3-4b-instruct-2507-vLLM",
-    },
-    {
-        "name": "qwen3-4b-instruct FireAttention",
-        "deployment_id": "accounts/pyroworks/deployments/ibj6ln2l",
-        "model_name": "qwen3-4b-instruct-2507-FireAttention",
+        "name": "gpt-oss-120b-trt-llm",
+        "deployment_id": "accounts/pyroworks/deployments/vehzni3k",
+        "model_name": "accounts/fireworks/models/gpt-oss-120b",
+        "provider": "fireworks-trt",  # Use TRT provider for client-side cache busting
     }
 ]
 # Configure edit this to match your workloads
 WORKLOADS = [
-    {"name": "P50 workload", "input_tokens": 915, "output_tokens": 12, "prompt_cache_max_len": 823},
-    {"name": "P90 workload", "input_tokens": 1274, "output_tokens": 22, "prompt_cache_max_len": 1152},
+    {"name": "P50 workload", "input_tokens": 3000, "output_tokens": 70, "prompt_cache_max_len": 0},
 ]
 
 # Benchmark settings
 CONCURRENCY_LEVELS = [1, 2, 4, 8, 16, 32, 64, 128]
-DURATION = "3min"
+DURATION = "2min"
 
 
 def run_benchmark(deployment: dict, workload: dict) -> bool:
@@ -48,6 +43,9 @@ def run_benchmark(deployment: dict, workload: dict) -> bool:
 
     if "prompt_cache_max_len" in workload:
         cmd.extend(["--prompt-cache-max-len", str(workload["prompt_cache_max_len"])])
+
+    if "provider" in deployment:
+        cmd.extend(["--provider", deployment["provider"]])
 
     cache = workload.get('prompt_cache_max_len', 0)
     print(f"\n{'='*60}")
