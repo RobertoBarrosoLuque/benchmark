@@ -37,6 +37,7 @@ def main():
     parser.add_argument('--tokenizer', help='HF tokenizer for validation')
     parser.add_argument('--reasoning-effort', type=str, choices=['none', 'low', 'medium', 'high'],
                         help='Reasoning effort for thinking models')
+    parser.add_argument('--provider', help='Provider type (fireworks, fireworks-trt, vllm, etc.)')
 
     args = parser.parse_args()
     script_dir = Path(__file__).parent
@@ -65,6 +66,8 @@ def main():
         collect_cmd.extend(["--tokenizer", args.tokenizer])
     if args.reasoning_effort:
         collect_cmd.extend(["--reasoning-effort", args.reasoning_effort])
+    if args.provider:
+        collect_cmd.extend(["--provider", args.provider])
 
     if not run_command(collect_cmd, "Data Collection"):
         sys.exit(1)
